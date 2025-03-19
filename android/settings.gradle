@@ -21,7 +21,7 @@ extensions.configure(com.facebook.react.ReactSettingsExtension) { ex ->
   }
 }
 
-rootProject.name = 'collect-rssi'
+rootProject.name = 'dishasarthi-companion'
 
 dependencyResolutionManagement {
   versionCatalogs {

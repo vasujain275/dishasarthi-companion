@@ -30,7 +30,7 @@
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="myapp"/>
         <data android:scheme="me.vasujain"/>
-        <data android:scheme="exp+collect-rssi"/>
+        <data android:scheme="exp+dishasarthi-companion"/>
       </intent-filter>
     </activity>
   </application>

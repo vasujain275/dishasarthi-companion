@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "collect-rssi",
-    "slug": "collect-rssi",
+    "name": "dishasarthi-companion",
+    "slug": "dishasarthi-companion",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
