@@ -4,13 +4,13 @@ declare module "react-native-wifi-reborn" {
     BSSID: string;
     capabilities: string;
     frequency: number;
-    level: number;
+    level: number; // RSSI value in dBm
     timestamp: number;
   }
 
   const WifiManager: {
     /**
-     * Returns a promise that resolves to a list of nearby WiFi networks
+     * Returns a promise that resolves to a list of nearby WiFi networks with their RSSI values
      */
     loadWifiList: () => Promise<WifiEntry[]>;
 
@@ -31,20 +31,10 @@ declare module "react-native-wifi-reborn" {
     getCurrentSignalStrength: () => Promise<number>;
 
     /**
-     * Force device to connect to a specific network
-     * @param ssid - The SSID of the network to connect to
-     * @param password - The password for the network (use empty string for open networks)
+     * Scan for WiFi networks and return a fresh list
+     * For Android only
      */
-    connectToProtectedSSID: (
-      ssid: string,
-      password: string,
-      isWEP?: boolean,
-    ) => Promise<void>;
-
-    /**
-     * Disconnect from current WiFi network
-     */
-    disconnect: () => Promise<boolean>;
+    reScanAndLoadWifiList: () => Promise<WifiEntry[]>;
 
     /**
      * For Android only: Enable/disable WiFi
@@ -56,31 +46,6 @@ declare module "react-native-wifi-reborn" {
      * For Android only: Check if WiFi is enabled
      */
     isEnabled: () => Promise<boolean>;
-
-    /**
-     * For Android only: Request location permissions needed for WiFi scanning
-     */
-    reScanAndLoadWifiList: () => Promise<WifiEntry[]>;
-
-    /**
-     * For iOS only: Check if the device has location services enabled
-     */
-    locationServicesEnabled: () => Promise<boolean>;
-
-    /**
-     * For iOS only: Request location permissions needed for WiFi scanning
-     */
-    requestLocationPermission: () => Promise<boolean>;
-
-    /**
-     * For iOS only: Check if the app has location permissions
-     */
-    hasLocationPermission: () => Promise<boolean>;
-
-    /**
-     * For iOS only: Determine if the device is connected to a WiFi network
-     */
-    isConnectedToWifi: () => Promise<boolean>;
   };
 
   export default WifiManager;

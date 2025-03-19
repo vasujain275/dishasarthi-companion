@@ -1,35 +1,47 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
-  Image,
   StyleSheet,
   Platform,
   TouchableOpacity,
   Alert,
+  TextInput,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  ScrollView,
 } from "react-native";
 import WifiManager from "react-native-wifi-reborn";
 import * as Location from "expo-location";
-import { HelloWave } from "@/components/HelloWave";
-import ParallaxScrollView from "@/components/ParallaxScrollView";
 import { ThemedText } from "@/components/ThemedText";
 import { ThemedView } from "@/components/ThemedView";
+import ParallaxScrollView from "@/components/ParallaxScrollView";
 
 export default function HomeScreen() {
-  const [rssi, setRssi] = useState("Loading...");
-  const [currentSSID, setCurrentSSID] = useState("");
-  const [refreshing, setRefreshing] = useState(false);
+  // Form data
+  const [serverUrl, setServerUrl] = useState("");
+  const [location, setLocation] = useState(""); // room number or name
+  const [place, setPlace] = useState(""); // building, mall, university name
+  const [username, setUsername] = useState("");
+
+  // Collection state
+  const [isRecording, setIsRecording] = useState(false);
+  const [collectedData, setCollectedData] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [permissionStatus, setPermissionStatus] = useState("checking");
+  const recordingInterval = useRef(null);
+  const [networkCount, setNetworkCount] = useState(0);
+  const [sampleCount, setSampleCount] = useState(0);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const timerRef = useRef(null);
 
   // Request location permissions
   const requestPermissions = async () => {
     try {
-      // For Android: request location permission
       if (Platform.OS === "android") {
         const { status } = await Location.requestForegroundPermissionsAsync();
 
         if (status !== "granted") {
           setPermissionStatus("denied");
-          setRssi("Permission required");
-          setCurrentSSID("No access");
           return false;
         }
       }
@@ -43,207 +55,363 @@ export default function HomeScreen() {
     }
   };
 
-  const fetchWifiInfo = async () => {
+  // Collect single sample of RSSI data
+  const collectRssiSample = async () => {
     try {
-      // Don't attempt to fetch if permission not granted
       if (permissionStatus !== "granted") {
-        const permissionGranted = await requestPermissions();
-        if (!permissionGranted) return;
+        return;
       }
 
-      setRefreshing(true);
+      setIsLoading(true);
 
-      // Get current SSID
-      const ssid = await WifiManager.getCurrentWifiSSID();
-      setCurrentSSID(ssid);
+      // Get all available WiFi networks with RSSI values
+      const networks = await WifiManager.loadWifiList();
 
-      // Get RSSI value
-      const level = await WifiManager.getCurrentSignalStrength();
-      setRssi(level.toString());
+      // Process and format for whereami
+      const timestamp = new Date().toISOString();
+      const rssiData = {};
+
+      networks.forEach((network) => {
+        rssiData[network.BSSID] = network.level;
+      });
+
+      // Add to collected data
+      setCollectedData((prevData) => [
+        ...prevData,
+        {
+          timestamp,
+          rssi_values: rssiData,
+        },
+      ]);
+
+      setSampleCount((prev) => prev + 1);
+      setNetworkCount(networks.length);
     } catch (error) {
-      console.error("Error fetching WiFi information:", error);
-      setRssi("Error");
+      console.error("Error collecting RSSI data:", error);
 
-      // Handle specific error cases
       if (error.message && error.message.includes("Location permission")) {
         setPermissionStatus("denied");
-        setRssi("Permission required");
-        Alert.alert(
-          "Location Permission Required",
-          "Please enable location permission in your device settings to access WiFi information.",
-          [{ text: "OK" }],
-        );
+        stopRecording();
       }
     } finally {
-      setRefreshing(false);
+      setIsLoading(false);
     }
   };
 
+  // Start recording RSSI data
+  const startRecording = async () => {
+    // Validate form fields
+    if (!serverUrl || !location || !place || !username) {
+      Alert.alert(
+        "Missing Information",
+        "Please fill in all fields before recording",
+      );
+      return;
+    }
+
+    // Ensure permission
+    if (permissionStatus !== "granted") {
+      const granted = await requestPermissions();
+      if (!granted) {
+        Alert.alert(
+          "Permission Required",
+          "Location permission is needed to collect WiFi data",
+        );
+        return;
+      }
+    }
+
+    // Clear previous data
+    setCollectedData([]);
+    setSampleCount(0);
+    setRecordingTime(0);
+
+    // Start recording
+    setIsRecording(true);
+
+    // Collect samples every second
+    recordingInterval.current = setInterval(collectRssiSample, 1000);
+
+    // Start timer
+    timerRef.current = setInterval(() => {
+      setRecordingTime((prev) => prev + 1);
+    }, 1000);
+  };
+
+  // Stop recording
+  const stopRecording = () => {
+    if (recordingInterval.current) {
+      clearInterval(recordingInterval.current);
+      recordingInterval.current = null;
+    }
+
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    setIsRecording(false);
+  };
+
+  // Submit data to server
+  const submitData = async () => {
+    if (collectedData.length === 0) {
+      Alert.alert("No Data", "Please record some data before submitting");
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+
+      // Prepare data for whereami format
+      const payload = {
+        username: username,
+        location: location,
+        place: place,
+        samples: collectedData,
+      };
+
+      // Send data to server
+      const response = await fetch(serverUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server responded with status: ${response.status}`);
+      }
+
+      // Success
+      Alert.alert(
+        "Success",
+        `Successfully submitted ${collectedData.length} samples`,
+      );
+
+      // Clear collected data
+      setCollectedData([]);
+      setSampleCount(0);
+      setRecordingTime(0);
+    } catch (error) {
+      console.error("Error submitting data:", error);
+      Alert.alert(
+        "Submission Error",
+        error.message || "Failed to submit data to server",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Format time display (MM:SS)
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  // Initialize permissions on component mount
   useEffect(() => {
-    // Initial permission check and data fetch
-    const initialize = async () => {
-      const permissionGranted = await requestPermissions();
-      if (permissionGranted) {
-        fetchWifiInfo();
+    requestPermissions();
+
+    // Clean up on unmount
+    return () => {
+      if (recordingInterval.current) {
+        clearInterval(recordingInterval.current);
+      }
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
       }
     };
-
-    initialize();
-
-    // Set interval to update RSSI value every 5 seconds if permission granted
-    let interval;
-    if (permissionStatus === "granted") {
-      interval = setInterval(fetchWifiInfo, 5000);
-    }
-
-    // Clear interval on component unmount
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [permissionStatus]);
-
-  // Convert RSSI to signal quality description
-  const getSignalQuality = (rssiValue) => {
-    if (
-      rssiValue === "Loading..." ||
-      rssiValue === "Error" ||
-      rssiValue === "Permission required"
-    )
-      return rssiValue;
-
-    const rssiNum = parseInt(rssiValue, 10);
-    if (rssiNum >= -50) return "Excellent";
-    if (rssiNum >= -60) return "Good";
-    if (rssiNum >= -70) return "Fair";
-    if (rssiNum >= -80) return "Poor";
-    return "Very Poor";
-  };
-
-  // Get signal bars (1-4) based on RSSI value
-  const getSignalBars = (rssiValue) => {
-    if (
-      rssiValue === "Loading..." ||
-      rssiValue === "Error" ||
-      rssiValue === "Permission required"
-    )
-      return "";
-
-    const rssiNum = parseInt(rssiValue, 10);
-    if (rssiNum >= -55) return "█ █ █ █";
-    if (rssiNum >= -65) return "█ █ █ ░";
-    if (rssiNum >= -75) return "█ █ ░ ░";
-    if (rssiNum >= -85) return "█ ░ ░ ░";
-    return "░ ░ ░ ░";
-  };
+  }, []);
 
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: "#A1CEDC", dark: "#1D3D47" }}
-      headerImage={
-        <Image
-          source={require("@/assets/images/partial-react-logo.png")}
-          style={styles.reactLogo}
-        />
-      }
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      style={styles.container}
     >
-      <ThemedView style={styles.container}>
-        <ThemedView style={styles.titleContainer}>
-          <ThemedText type="title">WiFi Signal</ThemedText>
-          <HelloWave />
-        </ThemedView>
-
-        {/* Permission status message if needed */}
-        {permissionStatus === "denied" && (
-          <ThemedView style={styles.permissionContainer}>
-            <ThemedText type="defaultSemiBold">
-              Location Permission Required
+      <ParallaxScrollView
+        headerBackgroundColor={{ light: "#A1CEDC", dark: "#1D3D47" }}
+      >
+        <ScrollView>
+          <ThemedView style={styles.formContainer}>
+            <ThemedText type="title" style={styles.title}>
+              RSSI Data Collection
             </ThemedText>
-            <ThemedText>
-              This app needs location permission to access WiFi information on
-              Android.
-            </ThemedText>
-            <TouchableOpacity
-              style={styles.permissionButton}
-              onPress={requestPermissions}
-            >
-              <ThemedText style={styles.buttonText}>
-                Grant Permission
-              </ThemedText>
-            </TouchableOpacity>
-          </ThemedView>
-        )}
 
-        {/* RSSI Display Section */}
-        <TouchableOpacity
-          style={styles.rssiContainer}
-          onPress={fetchWifiInfo}
-          activeOpacity={0.7}
-          disabled={permissionStatus === "denied"}
-        >
-          <ThemedText type="subtitle">
-            Current Network: {currentSSID}
-          </ThemedText>
+            {/* Permission message if needed */}
+            {permissionStatus === "denied" && (
+              <ThemedView style={styles.permissionContainer}>
+                <ThemedText type="defaultSemiBold">
+                  Location Permission Required
+                </ThemedText>
+                <TouchableOpacity
+                  style={styles.button}
+                  onPress={requestPermissions}
+                >
+                  <ThemedText style={styles.buttonText}>
+                    Grant Permission
+                  </ThemedText>
+                </TouchableOpacity>
+              </ThemedView>
+            )}
 
-          <ThemedView style={styles.rssiValueContainer}>
-            <ThemedText style={styles.rssiValue}>{rssi}</ThemedText>
-            {rssi !== "Loading..." &&
-              rssi !== "Error" &&
-              rssi !== "Permission required" && (
-                <ThemedText type="defaultSemiBold">dBm</ThemedText>
+            {/* Form Fields */}
+            <ThemedView style={styles.formField}>
+              <ThemedText type="defaultSemiBold">Server URL</ThemedText>
+              <TextInput
+                style={styles.input}
+                placeholder="https://example.com/api/collect"
+                value={serverUrl}
+                onChangeText={setServerUrl}
+                editable={!isRecording && !submitting}
+                autoCapitalize="none"
+                keyboardType="url"
+              />
+            </ThemedView>
+
+            <ThemedView style={styles.formField}>
+              <ThemedText type="defaultSemiBold">Location (Room)</ThemedText>
+              <TextInput
+                style={styles.input}
+                placeholder="Room 202"
+                value={location}
+                onChangeText={setLocation}
+                editable={!isRecording && !submitting}
+              />
+            </ThemedView>
+
+            <ThemedView style={styles.formField}>
+              <ThemedText type="defaultSemiBold">Place</ThemedText>
+              <TextInput
+                style={styles.input}
+                placeholder="NCU University, Vegas Mall, etc."
+                value={place}
+                onChangeText={setPlace}
+                editable={!isRecording && !submitting}
+              />
+            </ThemedView>
+
+            <ThemedView style={styles.formField}>
+              <ThemedText type="defaultSemiBold">Username</ThemedText>
+              <TextInput
+                style={styles.input}
+                placeholder="Your name"
+                value={username}
+                onChangeText={setUsername}
+                editable={!isRecording && !submitting}
+              />
+            </ThemedView>
+
+            {/* Recording Status */}
+            {isRecording && (
+              <ThemedView style={styles.statusContainer}>
+                <ThemedView style={styles.statusRow}>
+                  <ThemedText type="defaultSemiBold">
+                    Recording Time:
+                  </ThemedText>
+                  <ThemedText>{formatTime(recordingTime)}</ThemedText>
+                </ThemedView>
+
+                <ThemedView style={styles.statusRow}>
+                  <ThemedText type="defaultSemiBold">
+                    Samples Collected:
+                  </ThemedText>
+                  <ThemedText>{sampleCount}</ThemedText>
+                </ThemedView>
+
+                <ThemedView style={styles.statusRow}>
+                  <ThemedText type="defaultSemiBold">
+                    Networks Detected:
+                  </ThemedText>
+                  <ThemedText>{networkCount}</ThemedText>
+                </ThemedView>
+
+                <ThemedView style={styles.recordingIndicator}>
+                  <ActivityIndicator size="small" color="#ff0000" />
+                  <ThemedText style={styles.recordingText}>
+                    RECORDING
+                  </ThemedText>
+                </ThemedView>
+              </ThemedView>
+            )}
+
+            {!isRecording && collectedData.length > 0 && (
+              <ThemedView style={styles.summaryContainer}>
+                <ThemedText type="subtitle">Collection Summary</ThemedText>
+                <ThemedText>
+                  ✓ {collectedData.length} samples collected over{" "}
+                  {formatTime(recordingTime)}
+                </ThemedText>
+                <ThemedText>
+                  ✓ Average of{" "}
+                  {Math.round(networkCount / (collectedData.length || 1))}{" "}
+                  networks per sample
+                </ThemedText>
+              </ThemedView>
+            )}
+
+            {/* Action Buttons */}
+            <ThemedView style={styles.buttonContainer}>
+              {!isRecording ? (
+                <TouchableOpacity
+                  style={[styles.button, styles.startButton]}
+                  onPress={startRecording}
+                  disabled={submitting || permissionStatus !== "granted"}
+                >
+                  <ThemedText style={styles.buttonText}>
+                    Start Recording
+                  </ThemedText>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.button, styles.stopButton]}
+                  onPress={stopRecording}
+                >
+                  <ThemedText style={styles.buttonText}>
+                    Stop Recording
+                  </ThemedText>
+                </TouchableOpacity>
               )}
+
+              <TouchableOpacity
+                style={[
+                  styles.button,
+                  styles.submitButton,
+                  (isRecording || collectedData.length === 0 || submitting) &&
+                    styles.disabledButton,
+                ]}
+                onPress={submitData}
+                disabled={
+                  isRecording || collectedData.length === 0 || submitting
+                }
+              >
+                {submitting ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <ThemedText style={styles.buttonText}>Submit Data</ThemedText>
+                )}
+              </TouchableOpacity>
+            </ThemedView>
           </ThemedView>
-
-          <ThemedText type="subtitle">{getSignalQuality(rssi)}</ThemedText>
-          <ThemedText style={styles.signalBars}>
-            {getSignalBars(rssi)}
-          </ThemedText>
-
-          {permissionStatus === "granted" && (
-            <ThemedText style={styles.tapToRefresh}>
-              {refreshing ? "Refreshing..." : "Tap to refresh"}
-            </ThemedText>
-          )}
-        </TouchableOpacity>
-
-        {permissionStatus === "granted" && (
-          <ThemedView style={styles.infoContainer}>
-            <ThemedText type="subtitle">About WiFi Signal Strength</ThemedText>
-            <ThemedText>
-              RSSI (Received Signal Strength Indicator) measures WiFi signal
-              strength in dBm. Higher values (closer to 0) indicate stronger
-              signals.
-            </ThemedText>
-            <ThemedText>
-              • <ThemedText type="defaultSemiBold">-50 to -30 dBm:</ThemedText>{" "}
-              Excellent signal
-            </ThemedText>
-            <ThemedText>
-              • <ThemedText type="defaultSemiBold">-67 to -50 dBm:</ThemedText>{" "}
-              Good signal
-            </ThemedText>
-            <ThemedText>
-              • <ThemedText type="defaultSemiBold">-80 to -67 dBm:</ThemedText>{" "}
-              Fair signal
-            </ThemedText>
-            <ThemedText>
-              • <ThemedText type="defaultSemiBold">Below -80 dBm:</ThemedText>{" "}
-              Poor signal
-            </ThemedText>
-          </ThemedView>
-        )}
-      </ThemedView>
-    </ParallaxScrollView>
+        </ScrollView>
+      </ParallaxScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
+    flex: 1,
+  },
+  formContainer: {
+    padding: 16,
     gap: 16,
   },
-  titleContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
+  title: {
+    textAlign: "center",
     marginBottom: 8,
   },
   permissionContainer: {
@@ -253,55 +421,71 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     alignItems: "center",
   },
-  permissionButton: {
-    backgroundColor: "#A1CEDC",
-    paddingVertical: 8,
-    paddingHorizontal: 16,
+  formField: {
+    marginBottom: 12,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: "#cccccc",
     borderRadius: 8,
+    padding: 10,
+    marginTop: 4,
+    backgroundColor: "rgba(255, 255, 255, 0.8)",
+  },
+  buttonContainer: {
+    flexDirection: "column",
+    gap: 12,
     marginTop: 8,
+  },
+  button: {
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  startButton: {
+    backgroundColor: "#4CAF50",
+  },
+  stopButton: {
+    backgroundColor: "#f44336",
+  },
+  submitButton: {
+    backgroundColor: "#2196F3",
+  },
+  disabledButton: {
+    backgroundColor: "#cccccc",
   },
   buttonText: {
     fontWeight: "600",
+    color: "white",
+    fontSize: 16,
   },
-  rssiContainer: {
-    alignItems: "center",
-    padding: 20,
+  statusContainer: {
+    padding: 16,
+    backgroundColor: "rgba(255, 0, 0, 0.1)",
     borderRadius: 12,
-    backgroundColor: "rgba(161, 206, 220, 0.2)",
     marginVertical: 12,
   },
-  rssiValueContainer: {
+  statusRow: {
     flexDirection: "row",
-    alignItems: "flex-end",
-    marginVertical: 16,
+    justifyContent: "space-between",
+    paddingVertical: 4,
   },
-  rssiValue: {
-    fontSize: 48,
-    fontWeight: "bold",
-    marginRight: 4,
-  },
-  signalBars: {
-    fontSize: 24,
-    letterSpacing: 2,
+  recordingIndicator: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     marginTop: 8,
-  },
-  tapToRefresh: {
-    marginTop: 16,
-    opacity: 0.7,
-    fontSize: 12,
-  },
-  infoContainer: {
     gap: 8,
-    marginBottom: 16,
-    padding: 16,
-    borderRadius: 12,
-    backgroundColor: "rgba(161, 206, 220, 0.1)",
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: "absolute",
+  recordingText: {
+    color: "#ff0000",
+    fontWeight: "bold",
+  },
+  summaryContainer: {
+    padding: 16,
+    backgroundColor: "rgba(76, 175, 80, 0.1)",
+    borderRadius: 12,
+    marginVertical: 12,
   },
 });
