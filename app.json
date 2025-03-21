@@ -17,6 +17,7 @@
     },
     "android": {
       "package": "me.vasujain",
+      "versionCode": 1,
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "CHANGE_WIFI_STATE",
